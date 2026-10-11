@@ -1,0 +1,8 @@
+Flask>=3.0,<4
+python-dotenv>=1.0,<2
+PyMuPDF>=1.24,<2
+Pillow>=10,<12
+pytesseract>=0.3.13,<1
+openai>=1.40,<2
+pydantic>=2.6,<2.13
+gunicorn>=22,<24; platform_system != "Windows"
