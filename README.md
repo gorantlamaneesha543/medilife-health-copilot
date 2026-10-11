@@ -1,85 +1,76 @@
-# MediLife — personal health copilot prototype
+# MediLife Health Copilot
 
-MediLife is a responsive, single-service web application for private medical-record organization. It stores account-scoped profile and document metadata in SQLite, keeps uploaded files on a private filesystem path, and only offers AI explanations when a server-side provider key is configured. It is a hackathon prototype, not a clinical service.
+MediLife is a hackathon prototype for organizing medical documents and explaining record-supported findings in plain language. It is not a clinical service, diagnosis tool, or substitute for a clinician.
 
-> **Workspace note:** The expected `MediLife-main` source was not present in the supplied `D:\Medilife` folder. This implementation was created in that empty folder. No neighboring project was modified.
+## Public demo
 
-## Cloud deployment status (2026-10-11)
+- App: [https://medilife-health-copilot.onrender.com/](https://medilife-health-copilot.onrender.com/)
+- Health: [https://medilife-health-copilot.onrender.com/health](https://medilife-health-copilot.onrender.com/health)
+- The public Render free service uses an ephemeral filesystem. It is configured as a **synthetic-data demo**: it blocks account and record writes, and the browser-only sample workspace is clearly labeled. Never enter or upload personal health information there.
+- Free Render web services can spin down after 15 minutes idle and take about a minute to wake. Free filesystem changes are lost on restarts, deploys, and spin-down. Durable personal records require an approved paid persistent-storage design; no paid resource is created by this repository.
+- Health reports only whether an AI key is present, the demo-mode status, and Render's commit identifier. It never returns a secret.
 
-A separate Hatchable-hosted release is deployed at [https://medilife-health.hatchable.site](https://medilife-health.hatchable.site), project `medilife-health`. Its health endpoint is [https://medilife-health.hatchable.site/api/status](https://medilife-health.hatchable.site/api/status). The host provisions PostgreSQL, email-code accounts, and private object storage. The project is currently **private**; the owner must switch visibility to Public in [Hatchable project settings](https://hatchable.com/console/projects/medilife-health).
+## Implemented
 
-The hosted implementation is a separate serverless JavaScript project, not this local Flask service. It currently supports per-account records and profile, private document storage and owner-checked reads, PostgreSQL row ownership policies, a prototype FHIR export, and an English/Telugu interface. OCR and AI are intentionally disabled because the proposed Gemini processor would receive uploaded medical documents and that data destination has not been approved. Uploads are stored as `uploaded`, not marked processed. Real OCR/AI, provider setup, and end-to-end health-document workflows remain incomplete in the hosted release.
+- Responsive HTML/CSS/JavaScript interface with English and Telugu labels, dark mode, accessible navigation, and a synthetic sample workspace.
+- Flask API with password hashing, signed sessions, owner-scoped record access, upload validation, duplicate detection, protected file reads, user-initiated account deletion, and per-document deletion.
+- PDF text extraction with PyMuPDF; scanned PDF/image OCR through Tesseract when installed. Failed OCR is reported as a failure, not success.
+- Conservative extraction of common lab rows and prescription lines, with source excerpts and user review/correction.
+- Source-grounded OpenAI summary and copilot endpoints, when configured with a server-side key. Provider failures are distinct from a missing key.
+- Profile, document list, lab results, medicines, timeline, and a prototype FHIR-style export. This is not an official FHIR server, ABDM connection, or ABHA verification service.
 
-## Start locally
-
-1. Install Python 3.10+.
-2. Create and activate a virtual environment.
-3. Install the pinned-range dependencies: `python -m pip install -r requirements.txt`.
-4. Copy `.env.example` to `.env`; set a unique `FLASK_SECRET_KEY`.
-5. Install Tesseract OCR separately and make its executable available to the server if scanned images/PDFs should be OCR'd.
-6. Start the app with `python app.py` and open `http://127.0.0.1:5000`.
-7. Create an account (password length: 10 characters minimum), upload a synthetic test report, inspect its extraction status, and review any detected fields.
-
-PyMuPDF extracts digital PDF text. For a scanned PDF, the app renders each textless page and sends that image through the configured local Tesseract installation. JPG/PNG OCR uses Tesseract. Missing engines and unreadable documents produce an explicit failure state; the application does not claim OCR succeeded. `OPENAI_API_KEY` is optional and must stay server-side. When configured, selected document text or relevant excerpts are sent to the configured AI provider for explanations; the copilot UI discloses this. Without a key, summary/chat returns a configuration error and leaves records untouched.
+Extraction is heuristic and not clinically validated. Automated diagnosis, allergy, and medical-history extraction, OCR confidence scoring, persisted chat, comprehensive laboratory comparability, production rate limiting, and formal FHIR validation are not implemented. Current-use status for medicines is not inferred from old prescriptions.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-  U[User] --> W[Responsive web UI]
-  W --> A[Flask API + signed session]
-  A --> O[Private upload validation]
-  O --> P[PDF text parser]
-  O --> T[Page rendering + Tesseract OCR]
-  P --> X[Conservative structured line extraction]
-  T --> X
-  X --> V[Source excerpt + human review]
-  V --> D[(SQLite: per-user records)]
-  O --> F[(Private persistent file directory)]
-  D --> S[OpenAI server-side grounded explanation]
-  D --> R[FHIR R4-style prototype mapping]
-  D --> H[Profile · labs · medicines · timeline]
-  S --> L[English / Telugu explanation]
-  L --> W
+  U[User] --> UI[Original MediLife browser UI]
+  UI --> API[Flask API and signed session]
+  API --> ING[Validated private document ingestion]
+  ING --> PDF[PDF text extraction]
+  ING --> OCR[Tesseract OCR for scanned pages/images]
+  PDF --> X[Conservative structured extraction]
+  OCR --> X
+  X --> R[Source excerpt and human review]
+  R --> DB[(SQLite in local mode)]
+  DB --> AI[Server-side OpenAI explanation]
+  DB --> FHIR[Prototype FHIR-style mapping]
+  DB --> V[Profile, labs, medicines, timeline]
+  AI --> UI
+  V --> UI
 ```
 
-### Upload and explanation data flow
+The public free deployment deliberately disables personal-data writes because its local SQLite database and uploaded files are ephemeral. Production storage is not configured. A durable deployment needs a managed database plus private durable file storage (or an approved paid persistent disk for this single-instance prototype), backups, and a security review.
 
-```mermaid
-sequenceDiagram
-  actor User
-  participant UI as Browser UI
-  participant API as Authenticated Flask API
-  participant OCR as PDF parser / Tesseract
-  participant Review as Source-grounded review
-  participant DB as SQLite + private files
-  participant AI as Optional AI provider
-  User->>UI: Select PDF or image
-  UI->>API: Upload with same-origin session
-  API->>API: Check extension, signature, size, digest, owner
-  API->>OCR: Extract digital text / OCR scanned pages
-  OCR-->>API: Text or explicit error
-  API->>DB: Persist file metadata and extracted source text
-  API->>Review: Conservative candidate lab/medicine lines
-  Review-->>UI: Editable fields, source excerpts, review state
-  User->>UI: Correct and confirm extracted values
-  UI->>API: Save corrections and review confirmation
-  API->>DB: Persist verified state
-  User->>UI: Ask for a summary in English or Telugu
-  UI->>API: Document ID + requested language
-  API->>DB: Check ownership and retrieve source text
-  API->>AI: Send only selected source with safety instructions
-  AI-->>API: Explanation, or provider error
-  API-->>UI: Source-labelled explanation / clear error
+## Run locally
+
+Requires Python 3.10+, Node.js for the JavaScript syntax check, and Tesseract installed separately for OCR.
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+Copy-Item .env.example .env
+python app.py
 ```
 
-## Data model and FHIR mapping
+Open `http://127.0.0.1:5000`. Local mode defaults to `MEDILIFE_DEMO_MODE=0`; use synthetic records only. Set a unique `FLASK_SECRET_KEY`. Set `OPENAI_API_KEY` locally or in the backend host to enable actual AI calls. Never put it in frontend code or commit `.env`.
 
-SQLite tables: `users`, `profiles`, `documents`, `observations`, `medications`, `conditions`, `conversations`, and `messages`. Foreign keys cascade on account deletion; owner-scoped queries are used for document, source-file, lab, medicine, profile, summary, and export access. Uploaded filenames are sanitized for display and storage names are random identifiers. Duplicate content per account is rejected by SHA-256 digest.
+## Environment variables
 
-The `/api/fhir` endpoint emits a clearly labelled prototype R4-style collection: `Patient` (account email and UUID identifier), `DocumentReference`, `Observation` (source value, source range, source document), `MedicationRequest` (unknown status and source note), and `Condition` when one exists. The current extractor does not create condition records. This is not a validated FHIR server, ABDM connection, ABHA workflow, or official health identifier service.
+| Name | Purpose |
+| --- | --- |
+| `FLASK_SECRET_KEY` | Flask session signing secret; use a unique strong value |
+| `DATABASE_PATH` | SQLite file path (local/single-instance only) |
+| `UPLOAD_DIR` | Private source-file directory |
+| `OPENAI_API_KEY` | Optional, server-side provider credential |
+| `OPENAI_MODEL` | OpenAI model; defaults to `gpt-4o-mini` |
+| `MAX_UPLOAD_MB` | Maximum accepted document size; defaults to 15 |
+| `COOKIE_SECURE` | Set `1` behind HTTPS |
+| `MEDILIFE_DEMO_MODE` | `1` blocks API writes for the ephemeral public demo |
 
-## Run checks
+## Tests
 
 ```powershell
 python -m unittest discover -s tests -v
@@ -87,26 +78,22 @@ python -m py_compile app.py tests/test_app.py
 node --check static/app.js
 ```
 
-Tests cover the health endpoint, registration validation, per-account isolation, upload type and duplicate checks, the truthful OCR-unavailable state, private file access, provider-unconfigured behavior, and authenticated FHIR-style output. No real OCR or AI provider was available in the development environment, so provider-success paths and clinical extraction accuracy are not asserted as passed.
+Tests use synthetic data. Digital PDF extraction is tested with PyMuPDF. OCR requires the Tesseract executable; provider success requires a real server-side key and is not claimed as tested here. Provider failure, missing-key, data-isolation, upload, deletion, timeline, and FHIR-style serialization paths have automated coverage.
 
-## Deployment preparation
+## Render deployment
 
-`render.yaml` prepares a Python/Docker Render service with a health check, generated session secret, secure cookies, and persistent private disk for SQLite and source files. No Render service is deployed: this workspace is not a Git repository, and no GitHub/Render authorization or credentials are available. To deploy this Python application, publish it to a private GitHub repository, connect that repository to Render, and create the web service from `render.yaml`. Configure `OPENAI_API_KEY` in Render's server-side secret settings only if AI summaries and copilot answers are desired. The container installs Tesseract for scanned images and PDFs; deployment OCR has not been verified because Docker is unavailable here. This SQLite + single persistent disk design is a single-instance hackathon deployment, not a highly available clinical system.
+The `render.yaml` Blueprint uses the Dockerfile, Gunicorn, `/health`, and a Render-generated session secret. `OPENAI_API_KEY` is declared as a dashboard-supplied secret (`sync: false`). Saving it with **Save, rebuild, and deploy** or **Save and deploy** restarts the service with the new environment. Confirm `ai_configured: true` at `/health`; this checks only presence and does not validate the key or provider quota. Then confirm the health response's `release` matches the intended commit.
 
-Local automated checks passed on 2026-10-11: 7 unittest cases, Python compilation, and JavaScript syntax check. The digital-PDF test creates and extracts a synthetic report, persists its reviewable lab value, verifies timeline inclusion and private file access, and confirms missing AI credentials produce an error. A local Flask process started, but the execution sandbox denied HTTP socket access, so an HTTP health request from this environment was not verified. The cloud Hatchable checks and limitations are listed above. No public Render URL or production end-to-end workflow has been verified. Never upload real patient documents to an unreviewed deployment.
+Render's free tier cannot attach persistent disks and loses local files on restarts/spin-down. The Blueprint intentionally sets `MEDILIFE_DEMO_MODE=1`; the application also defaults to demo-only when running on Render and that setting is absent. To enable real user records, first approve and configure durable managed database and private file storage, backups, and production controls. Only then should the operator explicitly set `MEDILIFE_DEMO_MODE=0` and deploy. Do not use real patient data until that work and a security review are complete.
 
-## Feature status and limits
+## Privacy and safety
 
-- Implemented: responsive navigation/layout, English/Telugu interface labels, light/dark appearance, registration/login/logout, account-scoped SQLite records, document upload with progress, type/signature/size checks, duplicate detection, private file route, retry, text extraction when optional engines are present, conservative reviewable lab/medicine candidates, profile edits, labs, medicines, timeline, AI summary/chat integration, sample workspace kept in browser-only state, account deletion, FHIR-style export, and health endpoint.
-- Demo content: fictional lab and prescription entries, marked **SAMPLE** and **precomputed**. They do not enter personal storage and are not represented as AI-generated.
-- Not implemented: clinical-grade extraction/accuracy, handwritten OCR, automated document date/diagnosis/allergy extraction, persisted chat history, PostgreSQL/object-storage production architecture, rate limiting, clinician workflows, formal audit logging, formal FHIR validation, ABDM/ABHA integration, and deployment verification.
-- The UI/API are same-origin; no broad CORS policy is enabled. Production must set a strong secret and secure cookies. This prototype should receive a security review before handling real medical data.
+Uploaded text sent for a summary or chat question goes to the configured AI provider. API keys remain server-side. User data is owner-scoped, source files are not served as static assets, and account/document deletion endpoints are authenticated. The public demo accepts synthetic sample data only. This project has not undergone a compliance audit, clinical validation, penetration test, or formal healthcare-regulatory review.
 
-## Judge walkthrough (about 2 minutes)
+## Demo walkthrough
 
-1. Choose **Explore sample workspace** from sign-in to see the clearly marked fictional CBC, prescription, source flag, English/Telugu precomputed explanation, and timeline without mixing demo and personal data.
-2. Sign out, create a demo account, upload a synthetic PDF or image, and observe the real server extraction status. With OCR dependencies absent, the application shows a truthful failed state and retry action.
-3. Review any candidate fields and source excerpt; correct values and explicitly confirm them.
-4. Visit Labs, Medicines, Timeline, and Health Profile to see the same saved records and provenance.
-5. Enable the server-side AI key in a configured deployment to generate a source-grounded English or Telugu summary and ask a record-specific question.
-6. Show the prototype FHIR export and `/health` endpoint. Explain that ABDM connectivity is future work and that a persisted database/object store and provider credentials are needed for production.
+1. Open the public URL and choose **Explore clearly labelled sample data**.
+2. Show the fictional CBC and prescription, source-reported low flag, source references, profile, medicines, labs, and timeline.
+3. Switch English/Telugu and explain that the sample explanation is precomputed, not a live AI response.
+4. Visit Settings to show the prototype FHIR-style export description; no ABDM/ABHA service is connected.
+5. For a live AI demonstration, use a properly configured local environment or a durable approved deployment, upload only synthetic records, and verify the real API response.

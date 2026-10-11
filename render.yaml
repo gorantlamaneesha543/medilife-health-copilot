@@ -17,6 +17,8 @@ services:
         value: 15
       - key: COOKIE_SECURE
         value: "1"
+      - key: MEDILIFE_DEMO_MODE
+        value: "1"
       - key: OPENAI_API_KEY
         sync: false
       - key: OPENAI_MODEL

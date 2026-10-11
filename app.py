@@ -38,6 +38,16 @@ def now():
     return datetime.now(timezone.utc).isoformat()
 
 
+def demo_only_mode():
+    # Fail closed on Render unless durable private storage has been explicitly configured.
+    default = "1" if os.getenv("RENDER", "").lower() == "true" else "0"
+    return os.getenv("MEDILIFE_DEMO_MODE", default).strip() == "1"
+
+
+def release_id():
+    return os.getenv("RENDER_GIT_COMMIT", "")[:12] or None
+
+
 def db():
     if "db" not in g:
         DATA.parent.mkdir(parents=True, exist_ok=True)
@@ -121,6 +131,12 @@ def ensure_db():
     init_db()
 
 
+@app.before_request
+def restrict_temporary_demo_writes():
+    if demo_only_mode() and request.path.startswith("/api/") and request.method in {"POST", "PUT", "PATCH", "DELETE"}:
+        return jsonify(error="This temporary public demo accepts synthetic sample data only. Personal accounts and record changes are disabled until durable private storage is configured."), 503
+
+
 def user_id():
     return session.get("user_id")
 
@@ -142,7 +158,7 @@ def rowdict(row):
 def health():
     try:
         db().execute("SELECT 1")
-        return jsonify(status="ok", database="connected", ai_configured=bool(os.getenv("OPENAI_API_KEY", "").strip()))
+        return jsonify(status="ok", database="connected", ai_configured=bool(os.getenv("OPENAI_API_KEY", "").strip()), demo_mode=demo_only_mode(), release=release_id())
     except sqlite3.Error:
         return jsonify(status="degraded", database="unavailable"), 503
 
@@ -335,6 +351,20 @@ def document_file(doc_id):
     return send_from_directory(UPLOADS, row["stored_name"], as_attachment=False, download_name=row["filename"])
 
 
+@app.delete("/api/documents/<doc_id>")
+@auth_required
+def delete_document(doc_id):
+    row = db().execute("SELECT stored_name FROM documents WHERE id=? AND user_id=?", (doc_id,user_id())).fetchone()
+    if not row: return jsonify(error="Document not found."),404
+    db().execute("DELETE FROM documents WHERE id=? AND user_id=?",(doc_id,user_id()))
+    db().commit()
+    try:
+        (UPLOADS / row["stored_name"]).unlink(missing_ok=True)
+    except OSError:
+        app.logger.warning("A private uploaded document could not be removed from storage")
+    return jsonify(ok=True)
+
+
 @app.post("/api/documents/<doc_id>/retry")
 @auth_required
 def retry_document(doc_id):
@@ -381,7 +411,8 @@ def update_observation(obs_id):
     fields = {k:str(data[k])[:200] for k in allowed if k in data}
     if not fields: return jsonify(error="No editable fields provided."), 400
     fields["verified"] = 1 if data.get("verified") else 0
-    db().execute("UPDATE observations SET " + ",".join(f"{k}=?" for k in fields) + " WHERE id=? AND user_id=?", (*fields.values(),obs_id,user_id())); db().commit()
+    cur=db().execute("UPDATE observations SET " + ",".join(f"{k}=?" for k in fields) + " WHERE id=? AND user_id=?", (*fields.values(),obs_id,user_id())); db().commit()
+    if not cur.rowcount:return jsonify(error="Laboratory result not found."),404
     return jsonify(ok=True)
 
 

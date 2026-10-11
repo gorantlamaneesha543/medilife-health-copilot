@@ -4,7 +4,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import app as medilife
 
@@ -43,6 +43,17 @@ class MediLifeTests(unittest.TestCase):
             self.assertTrue(response.json["ai_configured"])
             self.assertNotIn("test-key-not-a-secret", response.get_data(as_text=True))
 
+    def test_temporary_demo_mode_blocks_account_writes_and_reports_release(self):
+        with patch.dict(os.environ,{"MEDILIFE_DEMO_MODE":"1","RENDER_GIT_COMMIT":"test-commit"}):
+            health = self.client.get("/health")
+            self.assertTrue(health.json["demo_mode"])
+            self.assertEqual(health.json["release"], "test-commit")
+            response = self.client.post("/api/auth/register", json={"email":"demo@example.test", "password":"a-long-test-password"})
+            self.assertEqual(response.status_code, 503)
+            self.assertIn("synthetic sample data only", response.json["error"])
+        with patch.dict(os.environ,{"RENDER":"true"},clear=True):
+            self.assertTrue(self.client.get("/health").json["demo_mode"])
+
     def test_auth_and_per_user_isolation(self):
         self.assertEqual(self.register(self.client, "one@example.test").status_code, 201)
         self.assertEqual(self.client.get("/api/documents").status_code, 200)
@@ -70,6 +81,21 @@ class MediLifeTests(unittest.TestCase):
         outsider = medilife.app.test_client()
         self.assertEqual(outsider.get("/api/documents/not-owned/file").status_code, 401)
 
+    def test_document_deletion_is_owner_scoped_and_removes_private_file(self):
+        self.register(self.client, "owner@example.test")
+        image=io.BytesIO(); from PIL import Image; Image.new("RGB",(30,30),"white").save(image,"PNG"); image.seek(0)
+        with patch.object(medilife,"extract_document",return_value=("synthetic report text","")):
+            created=self.client.post("/api/documents",data={"file":(image,"synthetic.png")},content_type="multipart/form-data")
+        self.assertEqual(created.status_code,201)
+        doc_id=created.json["document"]["id"]
+        stored=next(self.uploads.iterdir())
+        other=medilife.app.test_client(); self.register(other,"other@example.test")
+        self.assertEqual(other.delete(f"/api/documents/{doc_id}").status_code,404)
+        self.assertTrue(stored.exists())
+        self.assertEqual(self.client.delete(f"/api/documents/{doc_id}").status_code,200)
+        self.assertFalse(stored.exists())
+        self.assertEqual(self.client.get(f"/api/documents/{doc_id}").status_code,404)
+
     def test_ai_provider_missing_returns_clear_error(self):
         self.register(self.client, "one@example.test")
         response = self.client.post("/api/summary", json={"document_id":"missing","language":"en"})
@@ -84,7 +110,8 @@ class MediLifeTests(unittest.TestCase):
                 self.assertEqual(response[1], 503)
                 self.assertIn("not configured", response[0].get_json()["error"])
             with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key-not-a-secret"}):
-                response = medilife.ai_call("summary", "report.pdf", "source text")
+                with patch("openai.OpenAI", Mock(side_effect=RuntimeError("provider unavailable"))):
+                    response = medilife.ai_call("summary", "report.pdf", "source text")
             self.assertEqual(response[1], 502)
             self.assertNotIn("not configured", response[0].get_json()["error"])
 
