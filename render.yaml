@@ -2,21 +2,17 @@ services:
   - type: web
     name: medilife-health-copilot
     runtime: docker
-    plan: starter
+    plan: free
     healthCheckPath: /health
-    disk:
-      name: medilife-private-data
-      mountPath: /var/data
-      sizeGB: 1
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.10
       - key: FLASK_SECRET_KEY
         generateValue: true
       - key: DATABASE_PATH
-        value: /var/data/medilife.sqlite3
+        value: /tmp/medilife.sqlite3
       - key: UPLOAD_DIR
-        value: /var/data/uploads
+        value: /tmp/uploads
       - key: MAX_UPLOAD_MB
         value: 15
       - key: COOKIE_SECURE
