@@ -142,7 +142,7 @@ def rowdict(row):
 def health():
     try:
         db().execute("SELECT 1")
-        return jsonify(status="ok", database="connected", ai_configured=bool(os.getenv("OPENAI_API_KEY")))
+        return jsonify(status="ok", database="connected", ai_configured=bool(os.getenv("OPENAI_API_KEY", "").strip()))
     except sqlite3.Error:
         return jsonify(status="degraded", database="unavailable"), 503
 
@@ -444,7 +444,7 @@ def summary():
 
 
 def ai_call(kind,title,source,language="en",question=""):
-    key=os.getenv("OPENAI_API_KEY")
+    key=os.getenv("OPENAI_API_KEY", "").strip()
     if not key:return jsonify(error="AI summaries are not configured. Add OPENAI_API_KEY on the server; extracted records remain available."),503
     try:
         from openai import OpenAI

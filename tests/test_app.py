@@ -33,6 +33,16 @@ class MediLifeTests(unittest.TestCase):
         self.assertEqual(response.json["database"], "connected")
         self.assertEqual(self.client.post("/api/auth/register", json={"email":"bad","password":"short"}).status_code, 400)
 
+    def test_health_reports_openai_key_presence_without_exposing_value(self):
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "   "}):
+            response = self.client.get("/health")
+            self.assertFalse(response.json["ai_configured"])
+            self.assertNotIn("OPENAI_API_KEY", response.get_data(as_text=True))
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key-not-a-secret"}):
+            response = self.client.get("/health")
+            self.assertTrue(response.json["ai_configured"])
+            self.assertNotIn("test-key-not-a-secret", response.get_data(as_text=True))
+
     def test_auth_and_per_user_isolation(self):
         self.assertEqual(self.register(self.client, "one@example.test").status_code, 201)
         self.assertEqual(self.client.get("/api/documents").status_code, 200)
@@ -66,6 +76,17 @@ class MediLifeTests(unittest.TestCase):
         self.assertEqual(response.status_code, 404)
         response = self.client.post("/api/chat", json={"message":"Explain my report"})
         self.assertEqual(response.status_code, 404)
+
+    def test_ai_provider_errors_are_not_reported_as_missing_configuration(self):
+        with medilife.app.test_request_context():
+            with patch.dict(os.environ, {"OPENAI_API_KEY": "   "}):
+                response = medilife.ai_call("summary", "report.pdf", "source text")
+                self.assertEqual(response[1], 503)
+                self.assertIn("not configured", response[0].get_json()["error"])
+            with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key-not-a-secret"}):
+                response = medilife.ai_call("summary", "report.pdf", "source text")
+            self.assertEqual(response[1], 502)
+            self.assertNotIn("not configured", response[0].get_json()["error"])
 
     def test_fhir_export_is_authenticated_and_owned(self):
         self.assertEqual(self.client.get("/api/fhir").status_code, 401)
