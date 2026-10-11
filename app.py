@@ -38,10 +38,28 @@ def now():
     return datetime.now(timezone.utc).isoformat()
 
 
+def durable_storage_ready():
+    """Render writes require a mounted persistent disk for both SQLite and uploads."""
+    if os.getenv("RENDER", "").lower() != "true":
+        return False
+    mount = os.getenv("PERSISTENT_DATA_DIR", "").strip()
+    if not mount:
+        return False
+    root = Path(mount).resolve()
+    if not root.is_dir() or not os.path.ismount(root) or not os.access(root, os.W_OK):
+        return False
+    try:
+        return DATA.resolve().is_relative_to(root) and UPLOADS.resolve().is_relative_to(root)
+    except (OSError, ValueError):
+        return False
+
+
 def demo_only_mode():
-    # Fail closed on Render unless durable private storage has been explicitly configured.
+    # Fail closed on Render unless durable private storage has been mounted and configured.
     default = "1" if os.getenv("RENDER", "").lower() == "true" else "0"
-    return os.getenv("MEDILIFE_DEMO_MODE", default).strip() == "1"
+    if os.getenv("MEDILIFE_DEMO_MODE", default).strip() == "1":
+        return True
+    return os.getenv("RENDER", "").lower() == "true" and not durable_storage_ready()
 
 
 def release_id():
@@ -158,7 +176,7 @@ def rowdict(row):
 def health():
     try:
         db().execute("SELECT 1")
-        return jsonify(status="ok", database="connected", ai_configured=bool(os.getenv("OPENAI_API_KEY", "").strip()), demo_mode=demo_only_mode(), release=release_id())
+        return jsonify(status="ok", database="connected", ai_configured=bool(os.getenv("OPENAI_API_KEY", "").strip()), demo_mode=demo_only_mode(), durable_storage=durable_storage_ready() if os.getenv("RENDER", "").lower() == "true" else None, release=release_id())
     except sqlite3.Error:
         return jsonify(status="degraded", database="unavailable"), 503
 
@@ -478,7 +496,11 @@ def ai_call(kind,title,source,language="en",question=""):
     key=os.getenv("OPENAI_API_KEY", "").strip()
     if not key:return jsonify(error="AI summaries are not configured. Add OPENAI_API_KEY on the server; extracted records remain available."),503
     try:
-        from openai import OpenAI
+        from openai import APIConnectionError, APIStatusError, APITimeoutError, AuthenticationError, OpenAI, RateLimitError
+    except ImportError:
+        app.logger.error("OpenAI SDK is unavailable")
+        return jsonify(error="The AI provider library is unavailable on this server. Ask the operator to check the deployment dependencies."),503
+    try:
         client=OpenAI(api_key=key,timeout=30)
         if kind=="summary":
             instruction="Explain this medical record in simple English." if language!="te" else "Explain this medical record in accessible Telugu (తెలుగు). Keep clinical names, numbers and units faithful to the source."
@@ -490,8 +512,28 @@ def ai_call(kind,title,source,language="en",question=""):
         text=response.choices[0].message.content
         if not text: raise RuntimeError("Empty AI response")
         return jsonify(summary=text,source=title,language=language,generated_at=now())
-    except Exception:
-        app.logger.exception("AI provider request failed")
+    except AuthenticationError:
+        app.logger.warning("AI provider rejected server credentials")
+        return jsonify(error="The AI provider rejected its server credentials. Check OPENAI_API_KEY in Render settings."),502
+    except RateLimitError as exc:
+        details=getattr(exc,"body",None)
+        error=details.get("error",{}) if isinstance(details,dict) else {}
+        if isinstance(error,dict) and error.get("code")=="insufficient_quota":
+            app.logger.warning("AI provider quota is unavailable")
+            return jsonify(error="The AI provider account has no available quota. Check its billing and usage limits."),503
+        app.logger.warning("AI provider rate limit reached")
+        return jsonify(error="The AI provider is rate-limiting requests. Wait briefly and try again."),429
+    except APITimeoutError:
+        app.logger.warning("AI provider request timed out")
+        return jsonify(error="The AI provider took too long to respond. Your records are unchanged; try again."),504
+    except APIConnectionError:
+        app.logger.warning("AI provider connection failed")
+        return jsonify(error="The AI provider could not be reached. Your records are unchanged; try again later."),502
+    except APIStatusError:
+        app.logger.warning("AI provider returned an unsuccessful response")
+        return jsonify(error="The AI provider could not complete this request. Your records are unchanged; try again later."),502
+    except Exception as exc:
+        app.logger.error("AI provider request failed (%s)",type(exc).__name__)
         return jsonify(error="The AI service could not complete this request. Your saved records are unchanged; try again later."),502
 
 

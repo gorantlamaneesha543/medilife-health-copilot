@@ -10,9 +10,11 @@ services:
       - key: FLASK_SECRET_KEY
         generateValue: true
       - key: DATABASE_PATH
-        value: /tmp/medilife.sqlite3
+        value: /var/data/medilife.sqlite3
       - key: UPLOAD_DIR
-        value: /tmp/uploads
+        value: /var/data/uploads
+      - key: PERSISTENT_DATA_DIR
+        value: /var/data
       - key: MAX_UPLOAD_MB
         value: 15
       - key: COOKIE_SECURE

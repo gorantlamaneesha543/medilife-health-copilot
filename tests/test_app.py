@@ -1,5 +1,7 @@
 import io
+import httpx
 import importlib.util
+import openai
 import os
 import tempfile
 import unittest
@@ -53,6 +55,32 @@ class MediLifeTests(unittest.TestCase):
             self.assertIn("synthetic sample data only", response.json["error"])
         with patch.dict(os.environ,{"RENDER":"true"},clear=True):
             self.assertTrue(self.client.get("/health").json["demo_mode"])
+
+    def test_render_requires_mounted_storage_for_real_user_writes(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp); db_path=root/"medilife.sqlite3"; uploads=root/"uploads"
+            with patch.dict(os.environ,{"RENDER":"true","MEDILIFE_DEMO_MODE":"0","PERSISTENT_DATA_DIR":str(root)},clear=True):
+                with patch.object(medilife,"DATA",db_path), patch.object(medilife,"UPLOADS",uploads), patch("app.os.path.ismount",return_value=True):
+                    self.assertTrue(medilife.durable_storage_ready())
+                    self.assertFalse(medilife.demo_only_mode())
+                    outside=root.parent/"unmounted-uploads"
+                    with patch.object(medilife,"UPLOADS",outside):
+                        self.assertFalse(medilife.durable_storage_ready())
+                        self.assertTrue(medilife.demo_only_mode())
+
+    def test_ai_credentials_quota_and_timeout_have_distinct_errors(self):
+        request=httpx.Request("POST","https://api.openai.com/v1/chat/completions")
+        auth_error=openai.AuthenticationError("rejected",response=httpx.Response(401,request=request),body={})
+        quota_error=openai.RateLimitError("quota",response=httpx.Response(429,request=request),body={"error":{"code":"insufficient_quota"}})
+        timeout_error=openai.APITimeoutError(request=request)
+        with medilife.app.test_request_context(), patch.dict(os.environ,{"OPENAI_API_KEY":"test-key-not-a-secret"}):
+            for error,status,expected in [(auth_error,502,"rejected"),(quota_error,503,"quota"),(timeout_error,504,"too long")]:
+                client=Mock(); client.chat.completions.create.side_effect=error
+                with patch("openai.OpenAI",return_value=client):
+                    response=medilife.ai_call("summary","synthetic.pdf","synthetic source")
+                self.assertEqual(response[1],status)
+                self.assertIn(expected,response[0].get_json()["error"])
+                self.assertNotIn("test-key-not-a-secret",response[0].get_data(as_text=True))
 
     def test_auth_and_per_user_isolation(self):
         self.assertEqual(self.register(self.client, "one@example.test").status_code, 201)

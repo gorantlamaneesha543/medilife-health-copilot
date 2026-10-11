@@ -6,7 +6,7 @@ MediLife is a hackathon prototype for organizing medical documents and explainin
 
 - App: [https://medilife-health-copilot.onrender.com/](https://medilife-health-copilot.onrender.com/)
 - Health: [https://medilife-health-copilot.onrender.com/health](https://medilife-health-copilot.onrender.com/health)
-- The public Render free service uses an ephemeral filesystem. It is configured as a **synthetic-data demo**: it blocks account and record writes, and the browser-only sample workspace is clearly labeled. Never enter or upload personal health information there.
+- The public Render free service has no mounted persistent disk, so it is configured as a **synthetic-data demo**: it blocks account and record writes, and the browser-only sample workspace is clearly labeled. Never enter or upload personal health information there.
 - Free Render web services can spin down after 15 minutes idle and take about a minute to wake. Free filesystem changes are lost on restarts, deploys, and spin-down. Durable personal records require an approved paid persistent-storage design; no paid resource is created by this repository.
 - Health reports only whether an AI key is present, the demo-mode status, and Render's commit identifier. It never returns a secret.
 
@@ -68,7 +68,8 @@ Open `http://127.0.0.1:5000`. Local mode defaults to `MEDILIFE_DEMO_MODE=0`; use
 | `OPENAI_MODEL` | OpenAI model; defaults to `gpt-4o-mini` |
 | `MAX_UPLOAD_MB` | Maximum accepted document size; defaults to 15 |
 | `COOKIE_SECURE` | Set `1` behind HTTPS |
-| `MEDILIFE_DEMO_MODE` | `1` blocks API writes for the ephemeral public demo |
+| `MEDILIFE_DEMO_MODE` | `1` blocks API writes; keep enabled until durable storage is mounted and verified |
+| `PERSISTENT_DATA_DIR` | Render disk mount root; both `DATABASE_PATH` and `UPLOAD_DIR` must resolve beneath it |
 
 ## Tests
 
@@ -84,7 +85,7 @@ Tests use synthetic data. Digital PDF extraction is tested with PyMuPDF. OCR req
 
 The `render.yaml` Blueprint uses the Dockerfile, Gunicorn, `/health`, and a Render-generated session secret. `OPENAI_API_KEY` is declared as a dashboard-supplied secret (`sync: false`). Saving it with **Save, rebuild, and deploy** or **Save and deploy** restarts the service with the new environment. Confirm `ai_configured: true` at `/health`; this checks only presence and does not validate the key or provider quota. Then confirm the health response's `release` matches the intended commit.
 
-Render's free tier cannot attach persistent disks and loses local files on restarts/spin-down. The Blueprint intentionally sets `MEDILIFE_DEMO_MODE=1`; the application also defaults to demo-only when running on Render and that setting is absent. To enable real user records, first approve and configure durable managed database and private file storage, backups, and production controls. Only then should the operator explicitly set `MEDILIFE_DEMO_MODE=0` and deploy. Do not use real patient data until that work and a security review are complete.
+Render's free tier cannot attach persistent disks and loses local files on restarts/spin-down. The Blueprint is prepared for a disk mounted at `/var/data`, but intentionally keeps `MEDILIFE_DEMO_MODE=1`; the application also defaults to demo-only when running on Render and that setting is absent. It refuses real-user writes unless a mounted writable persistent disk exists and both the SQLite database and private upload directory resolve beneath that mount. To enable real user records, approve a paid Render service and disk, attach the disk at `/var/data`, keep the configured paths under that mount, set `MEDILIFE_DEMO_MODE=0`, verify `/health` reports `durable_storage: true`, and deploy. Keep independent backups and perform a security review before using real patient data.
 
 ## Privacy and safety
 
